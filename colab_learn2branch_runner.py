@@ -53,6 +53,7 @@ SAMPLE_ARCHIVE = DRIVE_DIR / "samples_500r_1000c_0.05d.tar.gz"
 LATEST_SAMPLE_CHECKPOINT = DRIVE_DIR / "partial_samples_latest_500r_1000c_0.05d.tar.gz"
 LATEST_SAMPLE_COUNT = DRIVE_DIR / "partial_samples_latest_count.txt"
 SAMPLE_DIR = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
+MIN_INSTANCE_ARCHIVE_BYTES = 100 * 1024 * 1024
 
 
 def run(args: list[str], cwd: Path | None = None) -> None:
@@ -248,7 +249,11 @@ def generate_instances() -> None:
     generate_split("test", N_TEST_INSTANCES, SEED + 2)
 
 
-def tar_directory(source: Path, target: Path) -> None:
+def tar_directory(source: Path, target: Path, *, skip_existing: bool = False) -> None:
+    if skip_existing and target.exists() and target.stat().st_size >= MIN_INSTANCE_ARCHIVE_BYTES:
+        size_mb = target.stat().st_size / (1024 * 1024)
+        print(f"archive already exists ({size_mb:.1f} MB), skipping: {target}", flush=True)
+        return
     target.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(target, "w:gz") as tar:
         tar.add(source, arcname=source.name)
@@ -412,6 +417,7 @@ def main() -> None:
     tar_directory(
         ECOLE_REPO / "data" / "instances" / "setcover",
         INSTANCE_ARCHIVE,
+        skip_existing=True,
     )
 
     if sample_count("train") >= TRAIN_SAMPLES:
