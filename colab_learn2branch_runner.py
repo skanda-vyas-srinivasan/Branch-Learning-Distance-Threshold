@@ -44,6 +44,10 @@ MAX_EPOCHS = 1000
 EPOCH_SAMPLES = 10_000
 BATCH_SIZE = 32
 
+INSTANCE_ARCHIVE = DRIVE_DIR / "instances_setcover_500r_1000c_0.05d.tar.gz"
+SAMPLE_ARCHIVE = DRIVE_DIR / "samples_500r_1000c_0.05d.tar.gz"
+SAMPLE_DIR = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
+
 
 def run(args: list[str], cwd: Path | None = None) -> None:
     print("+", " ".join(args), flush=True)
@@ -102,6 +106,38 @@ def patch_scripts() -> None:
         text = text.replace(
             "collect_samples(instances_valid, out_dir + '/valid', rng, test_size,",
             "collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,",
+        )
+        dataset_py.write_text(text)
+        text = dataset_py.read_text()
+
+    if "existing_samples = len(glob.glob(f'{out_dir}/sample_*.pkl'))" not in text:
+        text = text.replace(
+            "    os.makedirs(out_dir, exist_ok=True)\n"
+            "\n"
+            "    # start workers",
+            "    os.makedirs(out_dir, exist_ok=True)\n"
+            "    existing_samples = len(glob.glob(f'{out_dir}/sample_*.pkl'))\n"
+            "    if existing_samples >= n_samples:\n"
+            "        print(f'Done collecting samples for {out_dir}: already has {existing_samples}/{n_samples}')\n"
+            "        return\n"
+            "\n"
+            "    # start workers",
+        )
+        text = text.replace(
+            "    tmp_samples_dir = f'{out_dir}/tmp'\n"
+            "    os.makedirs(tmp_samples_dir, exist_ok=True)",
+            "    tmp_samples_dir = f'{out_dir}/tmp'\n"
+            "    shutil.rmtree(tmp_samples_dir, ignore_errors=True)\n"
+            "    os.makedirs(tmp_samples_dir, exist_ok=True)",
+        )
+        text = text.replace(
+            "    i = 0\n"
+            "    in_buffer = 0\n"
+            "    while i < n_samples:",
+            "    i = existing_samples\n"
+            "    in_buffer = 0\n"
+            "    print(f'Resuming {out_dir}: {existing_samples}/{n_samples} samples already exist')\n"
+            "    while i < n_samples:",
         )
         dataset_py.write_text(text)
 
@@ -212,6 +248,34 @@ def tar_directory(source: Path, target: Path) -> None:
         tar.add(source, arcname=source.name)
 
 
+def extract_archive(archive: Path, target_dir: Path) -> None:
+    print(f"restoring {archive} -> {target_dir}", flush=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(target_dir)
+
+
+def latest_partial_sample_archive() -> Path | None:
+    archives = sorted(DRIVE_DIR.glob("partial_samples_500r_1000c_0.05d_*.tar.gz"))
+    return archives[-1] if archives else None
+
+
+def sample_count(split: str = "train") -> int:
+    return len(list((SAMPLE_DIR / split).glob("sample_*.pkl")))
+
+
+def restore_drive_checkpoints() -> None:
+    instances_dir = ECOLE_REPO / "data" / "instances" / "setcover"
+    if not instances_dir.exists() and INSTANCE_ARCHIVE.exists():
+        extract_archive(INSTANCE_ARCHIVE, instances_dir.parent)
+
+    if not SAMPLE_DIR.exists():
+        partial = latest_partial_sample_archive()
+        if partial is not None:
+            extract_archive(partial, SAMPLE_DIR.parent)
+            print(f"restored train samples: {sample_count('train')}", flush=True)
+
+
 def save_artifacts() -> None:
     DRIVE_DIR.mkdir(parents=True, exist_ok=True)
     model_dir = ECOLE_REPO / "model" / "setcover" / str(SEED)
@@ -225,6 +289,7 @@ def main() -> None:
     print(f"runner started with {sys.executable}: {sys.version}", flush=True)
     DRIVE_DIR.mkdir(parents=True, exist_ok=True)
     ensure_repos()
+    restore_drive_checkpoints()
 
     import ecole
     import torch
@@ -241,35 +306,37 @@ def main() -> None:
     generate_instances()
     tar_directory(
         ECOLE_REPO / "data" / "instances" / "setcover",
-        DRIVE_DIR / "instances_setcover_500r_1000c_0.05d.tar.gz",
+        INSTANCE_ARCHIVE,
     )
 
-    run(
-        [
-            sys.executable,
-            "02_generate_dataset.py",
-            "setcover",
-            "-j",
-            str(N_JOBS),
-            "--train-size",
-            str(TRAIN_SAMPLES),
-            "--valid-size",
-            str(VALID_SAMPLES),
-            "--test-size",
-            str(TEST_SAMPLES),
-            "--node-record-prob",
-            str(NODE_RECORD_PROB),
-            "--time-limit",
-            str(SAMPLE_TIME_LIMIT),
-        ],
-        cwd=ECOLE_REPO,
-    )
+    if sample_count("train") >= TRAIN_SAMPLES:
+        print(f"train samples already complete: {sample_count('train')}/{TRAIN_SAMPLES}", flush=True)
+    else:
+        run(
+            [
+                sys.executable,
+                "02_generate_dataset.py",
+                "setcover",
+                "-j",
+                str(N_JOBS),
+                "--train-size",
+                str(TRAIN_SAMPLES),
+                "--valid-size",
+                str(VALID_SAMPLES),
+                "--test-size",
+                str(TEST_SAMPLES),
+                "--node-record-prob",
+                str(NODE_RECORD_PROB),
+                "--time-limit",
+                str(SAMPLE_TIME_LIMIT),
+            ],
+            cwd=ECOLE_REPO,
+        )
 
-    sample_dir = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
     for split in ("train", "valid", "test"):
-        count = len(list((sample_dir / split).glob("sample_*.pkl")))
+        count = sample_count(split)
         print(f"{split} samples: {count}", flush=True)
-    tar_directory(sample_dir, DRIVE_DIR / "samples_500r_1000c_0.05d.tar.gz")
+    tar_directory(SAMPLE_DIR, SAMPLE_ARCHIVE)
 
     run(
         [
