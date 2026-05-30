@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Run the Learn2Branch/Ecole setcover Colab pipeline with conda Python.
+
+Colab's notebook kernel can remain on the system Python while condacolab's
+packages live under /usr/local/bin/python. This script is meant to be invoked
+with /usr/local/bin/python from a Colab cell.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path("/content")
+ECOLE_REPO = ROOT / "learn2branch-ecole"
+ORIGINAL_REPO = ROOT / "learn2branch"
+DRIVE_DIR = Path("/content/drive/MyDrive/learn2branch_setcover_100k")
+
+NROWS = 500
+NCOLS = 1000
+DENSITY = 0.05
+SEED = 0
+
+N_TRAIN_INSTANCES = 10_000
+N_VALID_INSTANCES = 2_000
+N_TEST_INSTANCES = 2_000
+
+TRAIN_SAMPLES = 100_000
+VALID_SAMPLES = 20_000
+TEST_SAMPLES = 0
+NODE_RECORD_PROB = 0.05
+SAMPLE_TIME_LIMIT = 3600
+N_JOBS = 4
+
+MAX_EPOCHS = 1000
+EPOCH_SAMPLES = 10_000
+BATCH_SIZE = 32
+
+
+def run(args: list[str], cwd: Path | None = None) -> None:
+    print("+", " ".join(args), flush=True)
+    subprocess.run(args, cwd=cwd, check=True)
+
+
+def ensure_repos() -> None:
+    if not ECOLE_REPO.exists():
+        run(["git", "clone", "https://github.com/ds4dm/learn2branch-ecole.git", str(ECOLE_REPO)])
+    if not ORIGINAL_REPO.exists():
+        run(["git", "clone", "https://github.com/ds4dm/learn2branch.git", str(ORIGINAL_REPO)])
+
+
+def patch_scripts() -> None:
+    dataset_py = ECOLE_REPO / "02_generate_dataset.py"
+    train_py = ECOLE_REPO / "03_train_gnn.py"
+    utilities_py = ECOLE_REPO / "utilities.py"
+
+    text = dataset_py.read_text()
+    if "--train-size" not in text:
+        text = text.replace(
+            "    parser.add_argument(\n"
+            "        '-j', '--njobs',\n"
+            "        help='Number of parallel jobs.',\n"
+            "        type=int,\n"
+            "        default=1,\n"
+            "    )",
+            "    parser.add_argument(\n"
+            "        '-j', '--njobs',\n"
+            "        help='Number of parallel jobs.',\n"
+            "        type=int,\n"
+            "        default=1,\n"
+            "    )\n"
+            "    parser.add_argument('--train-size', type=int, default=100000)\n"
+            "    parser.add_argument('--valid-size', type=int, default=20000)\n"
+            "    parser.add_argument('--test-size', type=int, default=20000)\n"
+            "    parser.add_argument('--node-record-prob', type=float, default=0.05)\n"
+            "    parser.add_argument('--time-limit', type=float, default=None)",
+        )
+        text = text.replace(
+            "    train_size = 100000\n"
+            "    valid_size = 20000\n"
+            "    test_size = 20000\n"
+            "    node_record_prob = 0.05",
+            "    train_size = args.train_size\n"
+            "    valid_size = args.valid_size\n"
+            "    test_size = args.test_size\n"
+            "    node_record_prob = args.node_record_prob",
+        )
+        text = text.replace(
+            '    print(f"{len(instances_train)} train instances for {train_size} samples")',
+            "    if args.time_limit is not None:\n"
+            "        time_limit = args.time_limit\n\n"
+            '    print(f"{len(instances_train)} train instances for {train_size} samples")',
+        )
+        text = text.replace(
+            "collect_samples(instances_valid, out_dir + '/valid', rng, test_size,",
+            "collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,",
+        )
+        dataset_py.write_text(text)
+
+    text = train_py.read_text()
+    if "--max-epochs" not in text:
+        text = text.replace(
+            "    parser.add_argument(\n"
+            "        '-g', '--gpu',\n"
+            "        help='CUDA GPU id (-1 for CPU).',\n"
+            "        type=int,\n"
+            "        default=0,\n"
+            "    )",
+            "    parser.add_argument(\n"
+            "        '-g', '--gpu',\n"
+            "        help='CUDA GPU id (-1 for CPU).',\n"
+            "        type=int,\n"
+            "        default=0,\n"
+            "    )\n"
+            "    parser.add_argument('--max-epochs', type=int, default=1000)\n"
+            "    parser.add_argument('--epoch-samples', type=int, default=10000)\n"
+            "    parser.add_argument('--batch-size', type=int, default=32)\n"
+            "    parser.add_argument('--pretrain-batch-size', type=int, default=128)\n"
+            "    parser.add_argument('--valid-batch-size', type=int, default=128)",
+        )
+        text = text.replace(
+            "    max_epochs = 1000\n"
+            "    batch_size = 32\n"
+            "    pretrain_batch_size = 128\n"
+            "    valid_batch_size = 128",
+            "    max_epochs = args.max_epochs\n"
+            "    batch_size = args.batch_size\n"
+            "    pretrain_batch_size = args.pretrain_batch_size\n"
+            "    valid_batch_size = args.valid_batch_size",
+        )
+        text = text.replace(
+            "int(np.floor(10000/batch_size))*batch_size",
+            "int(np.floor(args.epoch_samples/batch_size))*batch_size",
+        )
+    text = text.replace(
+        "Scheduler(optimizer, mode='min', patience=10, factor=0.2, verbose=True)",
+        "Scheduler(optimizer, mode='min', patience=10, factor=0.2)",
+    )
+    train_py.write_text(text)
+
+    text = utilities_py.read_text()
+    if "_is_better" not in text[text.find("class Scheduler") :]:
+        text = text.replace(
+            "        if self.is_better(current, self.best):",
+            "        is_better = self.is_better if hasattr(self, 'is_better') else self._is_better\n"
+            "        if is_better(current, self.best):",
+        )
+        utilities_py.write_text(text)
+
+    run(
+        [
+            sys.executable,
+            "-m",
+            "py_compile",
+            str(dataset_py),
+            str(train_py),
+            str(utilities_py),
+        ]
+    )
+    print("patches applied", flush=True)
+
+
+def generate_instances() -> None:
+    sys.path.insert(0, str(ORIGINAL_REPO))
+    spec = importlib.util.spec_from_file_location(
+        "l2b_generator", ORIGINAL_REPO / "01_generate_instances.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load Learn2Branch instance generator")
+    l2b_generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(l2b_generator)
+
+    def generate_split(split_name: str, n_instances: int, seed: int) -> None:
+        out_dir = (
+            ECOLE_REPO
+            / "data"
+            / "instances"
+            / "setcover"
+            / f"{split_name}_{NROWS}r_{NCOLS}c_{DENSITY}d"
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        existing = len(list(out_dir.glob("instance_*.lp")))
+        if existing >= n_instances:
+            print(f"{split_name}: already has {existing}/{n_instances}", flush=True)
+            return
+
+        rng = np.random.RandomState(seed)
+        for i in range(existing, n_instances):
+            filename = out_dir / f"instance_{i + 1}.lp"
+            l2b_generator.generate_setcover(
+                NROWS, NCOLS, DENSITY, str(filename), rng, max_coef=100
+            )
+            if (i + 1) % 100 == 0 or (i + 1) == n_instances:
+                print(f"{split_name}: generated {i + 1}/{n_instances}", flush=True)
+
+    generate_split("train", N_TRAIN_INSTANCES, SEED)
+    generate_split("valid", N_VALID_INSTANCES, SEED + 1)
+    generate_split("test", N_TEST_INSTANCES, SEED + 2)
+
+
+def tar_directory(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(target, "w:gz") as tar:
+        tar.add(source, arcname=source.name)
+
+
+def save_artifacts() -> None:
+    DRIVE_DIR.mkdir(parents=True, exist_ok=True)
+    model_dir = ECOLE_REPO / "model" / "setcover" / str(SEED)
+    if (model_dir / "train_params.pkl").exists():
+        shutil.copy2(model_dir / "train_params.pkl", DRIVE_DIR / "train_params_seed0.pkl")
+    if (model_dir / "train_log.txt").exists():
+        shutil.copy2(model_dir / "train_log.txt", DRIVE_DIR / "train_log_seed0.txt")
+
+
+def main() -> None:
+    print(f"runner started with {sys.executable}: {sys.version}", flush=True)
+    DRIVE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_repos()
+
+    import ecole
+    import torch
+    import torch_geometric
+
+    print(f"ecole: {ecole.__version__}", flush=True)
+    print(f"torch: {torch.__version__}", flush=True)
+    print(f"torch_geometric: {torch_geometric.__version__}", flush=True)
+    print(f"cuda available: {torch.cuda.is_available()}", flush=True)
+    if torch.cuda.is_available():
+        print(f"gpu: {torch.cuda.get_device_name(0)}", flush=True)
+
+    patch_scripts()
+    generate_instances()
+    tar_directory(
+        ECOLE_REPO / "data" / "instances" / "setcover",
+        DRIVE_DIR / "instances_setcover_500r_1000c_0.05d.tar.gz",
+    )
+
+    run(
+        [
+            sys.executable,
+            "02_generate_dataset.py",
+            "setcover",
+            "-j",
+            str(N_JOBS),
+            "--train-size",
+            str(TRAIN_SAMPLES),
+            "--valid-size",
+            str(VALID_SAMPLES),
+            "--test-size",
+            str(TEST_SAMPLES),
+            "--node-record-prob",
+            str(NODE_RECORD_PROB),
+            "--time-limit",
+            str(SAMPLE_TIME_LIMIT),
+        ],
+        cwd=ECOLE_REPO,
+    )
+
+    sample_dir = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
+    for split in ("train", "valid", "test"):
+        count = len(list((sample_dir / split).glob("sample_*.pkl")))
+        print(f"{split} samples: {count}", flush=True)
+    tar_directory(sample_dir, DRIVE_DIR / "samples_500r_1000c_0.05d.tar.gz")
+
+    run(
+        [
+            sys.executable,
+            "03_train_gnn.py",
+            "setcover",
+            "-s",
+            str(SEED),
+            "-g",
+            "0",
+            "--max-epochs",
+            str(MAX_EPOCHS),
+            "--epoch-samples",
+            str(EPOCH_SAMPLES),
+            "--batch-size",
+            str(BATCH_SIZE),
+            "--pretrain-batch-size",
+            "128",
+            "--valid-batch-size",
+            "128",
+        ],
+        cwd=ECOLE_REPO,
+    )
+    save_artifacts()
+    print(f"artifacts saved in {DRIVE_DIR}", flush=True)
+
+
+if __name__ == "__main__":
+    main()
