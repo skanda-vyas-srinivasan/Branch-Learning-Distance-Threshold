@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from pathlib import Path
 
@@ -60,6 +61,26 @@ MIN_INSTANCE_ARCHIVE_BYTES = 100 * 1024 * 1024
 def run(args: list[str], cwd: Path | None = None) -> None:
     print("+", " ".join(args), flush=True)
     subprocess.run(args, cwd=cwd, check=True)
+
+
+def directory_size_mb(path: Path) -> float:
+    total = 0
+    if not path.exists():
+        return 0.0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total / (1024 * 1024)
+
+
+def heartbeat(stop_event: threading.Event, label: str, interval_seconds: int = 60) -> None:
+    elapsed = 0
+    while not stop_event.wait(interval_seconds):
+        elapsed += interval_seconds
+        print(f"[heartbeat] {label}: still running after {elapsed // 60} min", flush=True)
 
 
 def ensure_repos() -> None:
@@ -256,8 +277,19 @@ def tar_directory(source: Path, target: Path, *, skip_existing: bool = False) ->
         print(f"archive already exists ({size_mb:.1f} MB), skipping: {target}", flush=True)
         return
     target.parent.mkdir(parents=True, exist_ok=True)
+    source_mb = directory_size_mb(source)
+    print(f"[archive] start {source} -> {target} ({source_mb:.1f} MB input)", flush=True)
+    start = time.monotonic()
+    stop_event = threading.Event()
+    thread = threading.Thread(target=heartbeat, args=(stop_event, f"archive {target.name}"), daemon=True)
+    thread.start()
     with tarfile.open(target, "w:gz") as tar:
         tar.add(source, arcname=source.name)
+    stop_event.set()
+    thread.join(timeout=1)
+    elapsed = time.monotonic() - start
+    size_mb = target.stat().st_size / (1024 * 1024)
+    print(f"[archive] done {target} ({size_mb:.1f} MB output, {elapsed / 60:.1f} min)", flush=True)
 
 
 def tar_directory_atomic(source: Path, target: Path) -> None:
@@ -267,16 +299,40 @@ def tar_directory_atomic(source: Path, target: Path) -> None:
     tmp_target = target.with_suffix(target.suffix + ".tmp")
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp_target.unlink(missing_ok=True)
+    source_mb = directory_size_mb(source)
+    print(f"[checkpoint-archive] start {source} -> {target} ({source_mb:.1f} MB input)", flush=True)
+    start = time.monotonic()
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=heartbeat,
+        args=(stop_event, f"checkpoint archive {target.name}"),
+        daemon=True,
+    )
+    thread.start()
     with tarfile.open(tmp_target, "w:gz") as tar:
         tar.add(source, arcname=source.name)
     os.replace(tmp_target, target)
+    stop_event.set()
+    thread.join(timeout=1)
+    elapsed = time.monotonic() - start
+    size_mb = target.stat().st_size / (1024 * 1024)
+    print(f"[checkpoint-archive] done {target} ({size_mb:.1f} MB output, {elapsed / 60:.1f} min)", flush=True)
 
 
 def extract_archive(archive: Path, target_dir: Path) -> None:
-    print(f"restoring {archive} -> {target_dir}", flush=True)
+    size_mb = archive.stat().st_size / (1024 * 1024)
+    print(f"[extract] start {archive} -> {target_dir} ({size_mb:.1f} MB)", flush=True)
     target_dir.mkdir(parents=True, exist_ok=True)
+    start = time.monotonic()
+    stop_event = threading.Event()
+    thread = threading.Thread(target=heartbeat, args=(stop_event, f"extract {archive.name}"), daemon=True)
+    thread.start()
     with tarfile.open(archive, "r:gz") as tar:
         tar.extractall(target_dir)
+    stop_event.set()
+    thread.join(timeout=1)
+    elapsed = time.monotonic() - start
+    print(f"[extract] done {archive} ({elapsed / 60:.1f} min)", flush=True)
 
 
 def latest_partial_sample_archive() -> Path | None:
@@ -322,6 +378,7 @@ def run_with_sample_monitor(args: list[str], cwd: Path | None = None) -> None:
     process = subprocess.Popen(args, cwd=cwd)
     last_logged = (total_sample_count() // SAMPLE_LOG_EVERY) * SAMPLE_LOG_EVERY
     last_checkpoint = (total_sample_count() // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
+    last_heartbeat = time.monotonic()
 
     while process.poll() is None:
         count = total_sample_count()
@@ -331,6 +388,9 @@ def run_with_sample_monitor(args: list[str], cwd: Path | None = None) -> None:
         if count >= last_checkpoint + SAMPLE_CHECKPOINT_EVERY:
             last_checkpoint = (count // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
             checkpoint_samples(f"{last_checkpoint}_samples")
+        if time.monotonic() - last_heartbeat >= 60:
+            print(f"[sample-heartbeat] generator running, {count} samples currently visible", flush=True)
+            last_heartbeat = time.monotonic()
         time.sleep(5)
 
     return_code = process.wait()
@@ -384,6 +444,7 @@ def run_training_with_monitor(args: list[str], cwd: Path | None = None) -> None:
     log_path = ECOLE_REPO / "model" / "setcover" / str(SEED) / "train_log.txt"
     printed_lines = 0
     last_checkpoint_time = time.monotonic()
+    last_heartbeat = time.monotonic()
 
     while process.poll() is None:
         if log_path.exists():
@@ -395,6 +456,10 @@ def run_training_with_monitor(args: list[str], cwd: Path | None = None) -> None:
         if time.monotonic() - last_checkpoint_time >= TRAIN_CHECKPOINT_EVERY_SECONDS:
             checkpoint_training("periodic")
             last_checkpoint_time = time.monotonic()
+
+        if time.monotonic() - last_heartbeat >= 60:
+            print("[train-heartbeat] training process still running", flush=True)
+            last_heartbeat = time.monotonic()
 
         time.sleep(15)
 
