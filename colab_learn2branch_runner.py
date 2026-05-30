@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -43,9 +44,14 @@ N_JOBS = 4
 MAX_EPOCHS = 1000
 EPOCH_SAMPLES = 10_000
 BATCH_SIZE = 32
+SAMPLE_LOG_EVERY = 10
+SAMPLE_CHECKPOINT_EVERY = 5_000
+TRAIN_CHECKPOINT_EVERY_SECONDS = 600
 
 INSTANCE_ARCHIVE = DRIVE_DIR / "instances_setcover_500r_1000c_0.05d.tar.gz"
 SAMPLE_ARCHIVE = DRIVE_DIR / "samples_500r_1000c_0.05d.tar.gz"
+LATEST_SAMPLE_CHECKPOINT = DRIVE_DIR / "partial_samples_latest_500r_1000c_0.05d.tar.gz"
+LATEST_SAMPLE_COUNT = DRIVE_DIR / "partial_samples_latest_count.txt"
 SAMPLE_DIR = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
 
 
@@ -248,6 +254,18 @@ def tar_directory(source: Path, target: Path) -> None:
         tar.add(source, arcname=source.name)
 
 
+def tar_directory_atomic(source: Path, target: Path) -> None:
+    if not source.exists():
+        print(f"checkpoint skipped: missing {source}", flush=True)
+        return
+    tmp_target = target.with_suffix(target.suffix + ".tmp")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_target.unlink(missing_ok=True)
+    with tarfile.open(tmp_target, "w:gz") as tar:
+        tar.add(source, arcname=source.name)
+    os.replace(tmp_target, target)
+
+
 def extract_archive(archive: Path, target_dir: Path) -> None:
     print(f"restoring {archive} -> {target_dir}", flush=True)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -256,12 +274,55 @@ def extract_archive(archive: Path, target_dir: Path) -> None:
 
 
 def latest_partial_sample_archive() -> Path | None:
-    archives = sorted(DRIVE_DIR.glob("partial_samples_500r_1000c_0.05d_*.tar.gz"))
+    archives = sorted(
+        list(DRIVE_DIR.glob("partial_samples_500r_1000c_0.05d_*.tar.gz"))
+        + list(DRIVE_DIR.glob("partial_samples_latest_500r_1000c_0.05d.tar.gz"))
+    )
     return archives[-1] if archives else None
 
 
 def sample_count(split: str = "train") -> int:
     return len(list((SAMPLE_DIR / split).glob("sample_*.pkl")))
+
+
+def total_sample_count() -> int:
+    return sum(sample_count(split) for split in ("train", "valid", "test"))
+
+
+def checkpoint_samples(label: str) -> None:
+    count = total_sample_count()
+    print(f"[checkpoint] {label}: saving {count} samples to Drive", flush=True)
+    tar_directory_atomic(SAMPLE_DIR, LATEST_SAMPLE_CHECKPOINT)
+    LATEST_SAMPLE_COUNT.write_text(f"{count}\n")
+    print(
+        f"[checkpoint] {label}: saved {LATEST_SAMPLE_CHECKPOINT.name} with {count} samples",
+        flush=True,
+    )
+
+
+def run_with_sample_monitor(args: list[str], cwd: Path | None = None) -> None:
+    print("+", " ".join(args), flush=True)
+    process = subprocess.Popen(args, cwd=cwd)
+    last_logged = (total_sample_count() // SAMPLE_LOG_EVERY) * SAMPLE_LOG_EVERY
+    last_checkpoint = (total_sample_count() // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
+
+    while process.poll() is None:
+        count = total_sample_count()
+        if count >= last_logged + SAMPLE_LOG_EVERY:
+            last_logged = (count // SAMPLE_LOG_EVERY) * SAMPLE_LOG_EVERY
+            print(f"[sample-progress] {count} samples written", flush=True)
+        if count >= last_checkpoint + SAMPLE_CHECKPOINT_EVERY:
+            last_checkpoint = (count // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
+            checkpoint_samples(f"{last_checkpoint}_samples")
+        time.sleep(5)
+
+    return_code = process.wait()
+    count = total_sample_count()
+    print(f"[sample-progress] generator exited with {count} samples written", flush=True)
+    if count > 0:
+        checkpoint_samples("generator_exit")
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, args)
 
 
 def restore_drive_checkpoints() -> None:
@@ -283,6 +344,50 @@ def save_artifacts() -> None:
         shutil.copy2(model_dir / "train_params.pkl", DRIVE_DIR / "train_params_seed0.pkl")
     if (model_dir / "train_log.txt").exists():
         shutil.copy2(model_dir / "train_log.txt", DRIVE_DIR / "train_log_seed0.txt")
+
+
+def checkpoint_training(label: str) -> None:
+    model_dir = ECOLE_REPO / "model" / "setcover" / str(SEED)
+    copied = []
+    if (model_dir / "train_params.pkl").exists():
+        shutil.copy2(model_dir / "train_params.pkl", DRIVE_DIR / "train_params_latest.pkl")
+        copied.append("train_params_latest.pkl")
+    if (model_dir / "train_log.txt").exists():
+        shutil.copy2(model_dir / "train_log.txt", DRIVE_DIR / "train_log_latest.txt")
+        copied.append("train_log_latest.txt")
+    if copied:
+        print(f"[train-checkpoint] {label}: copied {', '.join(copied)}", flush=True)
+
+
+def run_training_with_monitor(args: list[str], cwd: Path | None = None) -> None:
+    print("+", " ".join(args), flush=True)
+    process = subprocess.Popen(args, cwd=cwd)
+    log_path = ECOLE_REPO / "model" / "setcover" / str(SEED) / "train_log.txt"
+    printed_lines = 0
+    last_checkpoint_time = time.monotonic()
+
+    while process.poll() is None:
+        if log_path.exists():
+            lines = log_path.read_text(errors="replace").splitlines()
+            for line in lines[printed_lines:]:
+                print(f"[train-log] {line}", flush=True)
+            printed_lines = len(lines)
+
+        if time.monotonic() - last_checkpoint_time >= TRAIN_CHECKPOINT_EVERY_SECONDS:
+            checkpoint_training("periodic")
+            last_checkpoint_time = time.monotonic()
+
+        time.sleep(15)
+
+    return_code = process.wait()
+    if log_path.exists():
+        lines = log_path.read_text(errors="replace").splitlines()
+        for line in lines[printed_lines:]:
+            print(f"[train-log] {line}", flush=True)
+
+    checkpoint_training("training_exit")
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, args)
 
 
 def main() -> None:
@@ -312,7 +417,7 @@ def main() -> None:
     if sample_count("train") >= TRAIN_SAMPLES:
         print(f"train samples already complete: {sample_count('train')}/{TRAIN_SAMPLES}", flush=True)
     else:
-        run(
+        run_with_sample_monitor(
             [
                 sys.executable,
                 "02_generate_dataset.py",
@@ -338,7 +443,7 @@ def main() -> None:
         print(f"{split} samples: {count}", flush=True)
     tar_directory(SAMPLE_DIR, SAMPLE_ARCHIVE)
 
-    run(
+    run_training_with_monitor(
         [
             sys.executable,
             "03_train_gnn.py",
