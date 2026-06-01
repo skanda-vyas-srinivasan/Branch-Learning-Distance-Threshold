@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+local_instances/
+local_results/
+generated_instances/
+generated_results/
+generated_medium_results/
+generated_medium_l2b_results/
+generated_l2b_probe_results/
+generated_*_results/
+ecole_l2b_results/
+ecole_l2b_probe_results/
+ecole_l2b*_results/
+ecole_l2b*/
+results/
+external/
+vast_work/

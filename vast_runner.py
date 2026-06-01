@@ -148,7 +148,7 @@ def git_commit_push(message: str, paths: list[Path]) -> None:
         print(f"[git] no existing paths for checkpoint: {message}", flush=True)
         return
 
-    run(["git", "add", "-A", "--", *[str(p.relative_to(ROOT)) for p in existing_paths]], cwd=ROOT)
+    run(["git", "add", "-f", "--", *[str(p.relative_to(ROOT)) for p in existing_paths]], cwd=ROOT)
     status = run_capture(["git", "status", "--porcelain", "--", *[str(p.relative_to(ROOT)) for p in existing_paths]], cwd=ROOT)
     if not status.stdout.strip():
         print(f"[git] no changes to commit for: {message}", flush=True)
@@ -426,7 +426,7 @@ def collect_samples() -> None:
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
     last_logged = (total_sample_count() // SAMPLE_LOG_EVERY) * SAMPLE_LOG_EVERY
-    last_checkpoint = (total_sample_count() // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
+    last_local_checkpoint = (total_sample_count() // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
     last_heartbeat = time.monotonic()
 
     while thread.is_alive():
@@ -434,11 +434,12 @@ def collect_samples() -> None:
         if count >= last_logged + SAMPLE_LOG_EVERY:
             last_logged = (count // SAMPLE_LOG_EVERY) * SAMPLE_LOG_EVERY
             print(f"[sample-progress] {count} samples written", flush=True)
-        if count >= last_checkpoint + SAMPLE_CHECKPOINT_EVERY:
-            last_checkpoint = (count // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
-            git_commit_push(
-                f"Vast sample checkpoint {last_checkpoint} samples",
-                [SAMPLE_DIR, ECOLE_REPO / "data" / "samples" / "setcover"],
+        if count >= last_local_checkpoint + SAMPLE_CHECKPOINT_EVERY:
+            last_local_checkpoint = (count // SAMPLE_CHECKPOINT_EVERY) * SAMPLE_CHECKPOINT_EVERY
+            print(
+                f"[sample-checkpoint] {last_local_checkpoint} samples visible locally; "
+                "not pushing sample files",
+                flush=True,
             )
         if time.monotonic() - last_heartbeat >= 60:
             print(f"[sample-heartbeat] generator running, {count} samples currently visible", flush=True)
@@ -451,8 +452,6 @@ def collect_samples() -> None:
 
     count = total_sample_count()
     print(f"[sample-progress] generator exited with {count} samples written", flush=True)
-    if count > 0:
-        git_commit_push(f"Vast sample generation complete {count} samples", [SAMPLE_DIR])
 
 
 def train_model() -> None:
@@ -479,7 +478,10 @@ def train_model() -> None:
         "128",
     ]
     run_in_thread_with_monitor(args, ECOLE_REPO, "training")
-    git_commit_push("Vast training complete", [MODEL_DIR])
+    git_commit_push(
+        "Vast training complete",
+        [MODEL_DIR / "train_params.pkl", MODEL_DIR / "train_log.txt"],
+    )
 
 
 def main() -> None:
@@ -500,12 +502,6 @@ def main() -> None:
     patch_scripts()
 
     generate_instances()
-    git_commit_push(
-        "Vast instance generation complete "
-        f"{N_TRAIN_INSTANCES} train {N_VALID_INSTANCES} valid {N_TEST_INSTANCES} test",
-        [INSTANCE_DIR, ECOLE_REPO / "data" / "instances" / "setcover"],
-    )
-
     collect_samples()
     train_model()
     print("vast runner finished", flush=True)
