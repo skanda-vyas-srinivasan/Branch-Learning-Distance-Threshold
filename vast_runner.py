@@ -8,15 +8,24 @@ to GitHub.
 
 Run:
     GITHUB_TOKEN=mytoken python vast_runner.py
+
+Sample-only run with archive copy:
+    L2B_STAGE=samples SAMPLE_ARCHIVE_DIR=/mnt/gdrive GITHUB_TOKEN=mytoken python vast_runner.py
+
+Train-only run after restoring/downloading the archive:
+    L2B_STAGE=train SAMPLE_ARCHIVE_PATH=/path/to/samples_setcover_500r_1000c_0.05d.tar.gz GITHUB_TOKEN=mytoken python vast_runner.py
 """
 
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 from pathlib import Path
@@ -52,6 +61,9 @@ SAMPLE_CHECKPOINT_EVERY = 5_000
 SAMPLE_DIR = ECOLE_REPO / "data" / "samples" / "setcover" / "500r_1000c_0.05d"
 INSTANCE_DIR = ECOLE_REPO / "data" / "instances" / "setcover"
 MODEL_DIR = ECOLE_REPO / "model" / "setcover" / str(SEED)
+ARTIFACT_DIR = WORK_DIR / "artifacts"
+SAMPLE_ARCHIVE = ARTIFACT_DIR / "samples_setcover_500r_1000c_0.05d.tar.gz"
+SAMPLE_MANIFEST = ARTIFACT_DIR / "samples_setcover_500r_1000c_0.05d_manifest.json"
 
 REMOTE_URL = "https://{token}@github.com/skanda-vyas-srinivasan/Branch-Learning-Distance-Threshold.git"
 
@@ -348,8 +360,123 @@ def sample_count(split: str = "train") -> int:
     return len(list((SAMPLE_DIR / split).glob("sample_*.pkl")))
 
 
+def sample_counts() -> dict[str, int]:
+    return {split: sample_count(split) for split in ("train", "valid", "test")}
+
+
 def total_sample_count() -> int:
     return sum(sample_count(split) for split in ("train", "valid", "test"))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def archive_samples() -> None:
+    counts = sample_counts()
+    if counts["train"] < TRAIN_SAMPLES or counts["valid"] < VALID_SAMPLES:
+        raise RuntimeError(
+            "refusing to archive incomplete samples: "
+            f"train={counts['train']}/{TRAIN_SAMPLES}, valid={counts['valid']}/{VALID_SAMPLES}"
+        )
+
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_archive = SAMPLE_ARCHIVE.with_name(f"{SAMPLE_ARCHIVE.name}.tmp")
+    if tmp_archive.exists():
+        tmp_archive.unlink()
+
+    print(f"[sample-archive] creating {SAMPLE_ARCHIVE}", flush=True)
+    with tarfile.open(tmp_archive, "w:gz") as tar:
+        tar.add(SAMPLE_DIR, arcname="data/samples/setcover/500r_1000c_0.05d")
+    tmp_archive.replace(SAMPLE_ARCHIVE)
+
+    archive_sha256 = sha256_file(SAMPLE_ARCHIVE)
+    manifest = {
+        "archive": SAMPLE_ARCHIVE.name,
+        "sha256": archive_sha256,
+        "bytes": SAMPLE_ARCHIVE.stat().st_size,
+        "sample_counts": counts,
+        "settings": {
+            "nrows": NROWS,
+            "ncols": NCOLS,
+            "density": DENSITY,
+            "seed": SEED,
+            "train_samples": TRAIN_SAMPLES,
+            "valid_samples": VALID_SAMPLES,
+            "test_samples": TEST_SAMPLES,
+            "node_record_prob": NODE_RECORD_PROB,
+        },
+    }
+    SAMPLE_MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(
+        f"[sample-archive] wrote {SAMPLE_ARCHIVE} "
+        f"({SAMPLE_ARCHIVE.stat().st_size / 1024**3:.2f}GB, sha256={archive_sha256})",
+        flush=True,
+    )
+
+    archive_dir = os.environ.get("SAMPLE_ARCHIVE_DIR")
+    if archive_dir:
+        destination = Path(archive_dir).expanduser().resolve()
+        destination.mkdir(parents=True, exist_ok=True)
+        print(f"[sample-archive] copying archive and manifest to {destination}", flush=True)
+        shutil.copy2(SAMPLE_ARCHIVE, destination / SAMPLE_ARCHIVE.name)
+        shutil.copy2(SAMPLE_MANIFEST, destination / SAMPLE_MANIFEST.name)
+        print("[sample-archive] copy complete", flush=True)
+
+
+def samples_complete() -> bool:
+    counts = sample_counts()
+    return counts["train"] >= TRAIN_SAMPLES and counts["valid"] >= VALID_SAMPLES
+
+
+def find_sample_archive_for_restore() -> Path | None:
+    explicit_path = os.environ.get("SAMPLE_ARCHIVE_PATH")
+    if explicit_path:
+        path = Path(explicit_path).expanduser().resolve()
+        if not path.exists():
+            raise RuntimeError(f"SAMPLE_ARCHIVE_PATH does not exist: {path}")
+        return path
+
+    archive_dir = os.environ.get("SAMPLE_ARCHIVE_DIR")
+    if archive_dir:
+        path = Path(archive_dir).expanduser().resolve() / SAMPLE_ARCHIVE.name
+        if path.exists():
+            return path
+
+    if SAMPLE_ARCHIVE.exists():
+        return SAMPLE_ARCHIVE
+    return None
+
+
+def restore_samples_from_archive_if_needed() -> None:
+    if samples_complete():
+        print(f"samples already available locally: {sample_counts()}", flush=True)
+        return
+
+    archive_path = find_sample_archive_for_restore()
+    if archive_path is None:
+        raise RuntimeError(
+            "samples are not complete locally and no archive was found. "
+            "Set SAMPLE_ARCHIVE_PATH=/path/to/samples_setcover_500r_1000c_0.05d.tar.gz "
+            "or rerun L2B_STAGE=samples first."
+        )
+
+    print(f"[sample-archive] restoring samples from {archive_path}", flush=True)
+    destination_root = ECOLE_REPO.resolve()
+    with tarfile.open(archive_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            target = (destination_root / member.name).resolve()
+            if destination_root != target and destination_root not in target.parents:
+                raise RuntimeError(f"unsafe path in sample archive: {member.name}")
+        tar.extractall(destination_root)
+
+    if not samples_complete():
+        raise RuntimeError(f"sample archive restore did not produce complete samples: {sample_counts()}")
+    print(f"[sample-archive] restore complete: {sample_counts()}", flush=True)
 
 
 def generate_instances() -> None:
@@ -511,9 +638,13 @@ def train_model() -> None:
 
 
 def main() -> None:
+    stage = os.environ.get("L2B_STAGE", "all").lower()
+    valid_stages = {"all", "samples", "train"}
+    if stage not in valid_stages:
+        raise RuntimeError(f"L2B_STAGE must be one of {sorted(valid_stages)}, got {stage!r}")
+
     require_python_311()
     print_system_info()
-    git_setup()
     pip_install_missing()
 
     import ecole
@@ -527,9 +658,17 @@ def main() -> None:
     ensure_repos()
     patch_scripts()
 
-    generate_instances()
-    collect_samples()
-    train_model()
+    if stage in {"all", "samples"}:
+        generate_instances()
+        collect_samples()
+        archive_samples()
+        if stage == "samples":
+            print("vast runner finished after sample generation/archive", flush=True)
+            return
+
+    if stage in {"all", "train"}:
+        restore_samples_from_archive_if_needed()
+        train_model()
     print("vast runner finished", flush=True)
 
 
