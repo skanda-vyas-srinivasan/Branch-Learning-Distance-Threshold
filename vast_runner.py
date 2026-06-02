@@ -255,6 +255,13 @@ def patch_scripts() -> None:
         )
         dataset_py.write_text(text)
 
+    text = dataset_py.read_text()
+    if "pseudo_candidates=True" in text:
+        text = text.replace("pseudo_candidates=True", "pseudo_candidates=False")
+    if "pseudo_candidates=False" not in text:
+        raise RuntimeError("failed to patch 02_generate_dataset.py: pseudo_candidates=False not found")
+    dataset_py.write_text(text)
+
     text = train_py.read_text()
     if "--max-epochs" not in text:
         text = text.replace(
@@ -297,13 +304,32 @@ def patch_scripts() -> None:
     train_py.write_text(text)
 
     text = utilities_py.read_text()
+    old_inc = "    def __inc__(self, key, value, store, *args, **kwargs):"
+    new_inc = "    def __inc__(self, key, value, *args, **kwargs):"
+    if old_inc in text:
+        text = text.replace(old_inc, new_inc)
+    if new_inc not in text:
+        raise RuntimeError("failed to patch utilities.py: __inc__ signature not found")
+    if "candidate_scores[nan_mask] = min_score - 1.0" not in text:
+        old_candidate_scores = "        candidate_scores = torch.FloatTensor([sample_scores[j] for j in candidates])"
+        if old_candidate_scores not in text:
+            raise RuntimeError("failed to patch utilities.py: candidate_scores assignment not found")
+        text = text.replace(
+            old_candidate_scores,
+            "        candidate_scores = torch.FloatTensor([sample_scores[j] for j in candidates])\n"
+            "        nan_mask = torch.isnan(candidate_scores)\n"
+            "        if nan_mask.any():\n"
+            "            finite_scores = candidate_scores[torch.isfinite(candidate_scores)]\n"
+            "            min_score = finite_scores.min().item() if finite_scores.numel() else 0.0\n"
+            "            candidate_scores[nan_mask] = min_score - 1.0",
+        )
     if "_is_better" not in text[text.find("class Scheduler") :]:
         text = text.replace(
             "        if self.is_better(current, self.best):",
             "        is_better = self.is_better if hasattr(self, 'is_better') else self._is_better\n"
             "        if is_better(current, self.best):",
         )
-        utilities_py.write_text(text)
+    utilities_py.write_text(text)
 
     run(
         [
