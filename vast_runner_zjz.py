@@ -190,88 +190,7 @@ def ensure_repos() -> None:
 
 
 def patch_scripts() -> None:
-    dataset_py = ECOLE_REPO / "02_generate_dataset.py"
     train_py = ECOLE_REPO / "03_train_gnn.py"
-    utilities_py = ECOLE_REPO / "utilities.py"
-
-    text = dataset_py.read_text()
-    if "--train-size" not in text:
-        text = text.replace(
-            "    parser.add_argument(\n"
-            "        '-j', '--njobs',\n"
-            "        help='Number of parallel jobs.',\n"
-            "        type=int,\n"
-            "        default=1,\n"
-            "    )",
-            "    parser.add_argument(\n"
-            "        '-j', '--njobs',\n"
-            "        help='Number of parallel jobs.',\n"
-            "        type=int,\n"
-            "        default=1,\n"
-            "    )\n"
-            "    parser.add_argument('--train-size', type=int, default=100000)\n"
-            "    parser.add_argument('--valid-size', type=int, default=20000)\n"
-            "    parser.add_argument('--test-size', type=int, default=20000)\n"
-            "    parser.add_argument('--node-record-prob', type=float, default=0.05)\n"
-            "    parser.add_argument('--time-limit', type=float, default=None)",
-        )
-        text = text.replace(
-            "    train_size = 100000\n"
-            "    valid_size = 20000\n"
-            "    test_size = 20000\n"
-            "    node_record_prob = 0.05",
-            "    train_size = args.train_size\n"
-            "    valid_size = args.valid_size\n"
-            "    test_size = args.test_size\n"
-            "    node_record_prob = args.node_record_prob",
-        )
-        text = text.replace(
-            '    print(f"{len(instances_train)} train instances for {train_size} samples")',
-            "    if args.time_limit is not None:\n"
-            "        time_limit = args.time_limit\n\n"
-            '    print(f"{len(instances_train)} train instances for {train_size} samples")',
-        )
-        text = text.replace(
-            "collect_samples(instances_valid, out_dir + '/valid', rng, test_size,",
-            "collect_samples(instances_valid, out_dir + '/valid', rng, valid_size,",
-        )
-        dataset_py.write_text(text)
-        text = dataset_py.read_text()
-
-    if "existing_samples = len(glob.glob(f'{out_dir}/sample_*.pkl'))" not in text:
-        text = text.replace(
-            "    os.makedirs(out_dir, exist_ok=True)\n"
-            "\n"
-            "    # start workers",
-            "    os.makedirs(out_dir, exist_ok=True)\n"
-            "    existing_samples = len(glob.glob(f'{out_dir}/sample_*.pkl'))\n"
-            "    if existing_samples >= n_samples:\n"
-            "        print(f'Done collecting samples for {out_dir}: already has {existing_samples}/{n_samples}')\n"
-            "        return\n"
-            "\n"
-            "    # start workers",
-        )
-        text = text.replace(
-            "    tmp_samples_dir = f'{out_dir}/tmp'\n"
-            "    os.makedirs(tmp_samples_dir, exist_ok=True)",
-            "    tmp_samples_dir = f'{out_dir}/tmp'\n"
-            "    shutil.rmtree(tmp_samples_dir, ignore_errors=True)\n"
-            "    os.makedirs(tmp_samples_dir, exist_ok=True)",
-        )
-        text = text.replace(
-            "    i = 0\n"
-            "    in_buffer = 0\n"
-            "    while i < n_samples:",
-            "    i = existing_samples\n"
-            "    in_buffer = 0\n"
-            "    print(f'Resuming {out_dir}: {existing_samples}/{n_samples} samples already exist')\n"
-            "    while i < n_samples:",
-        )
-        dataset_py.write_text(text)
-
-    text = dataset_py.read_text()
-    text = text.replace("pseudo_candidates=True", "pseudo_candidates=False")
-    dataset_py.write_text(text)
 
     text = train_py.read_text()
     text = text.replace(
@@ -290,86 +209,10 @@ def patch_scripts() -> None:
         "policy.load_state_dict(torch.load(pathlib.Path(running_dir)/f'train_BGCN_{args.problem}_params.pkl'))",
         "policy.load_state_dict(torch.load(pathlib.Path(running_dir)/'train_params.pkl'))",
     )
-    text = text.replace(
-        "Scheduler(optimizer, mode='min', patience=10, factor=0.2, verbose=True)",
-        "Scheduler(optimizer, mode='min', patience=10, factor=0.2)",
-    )
-    if "--max-epochs" not in text:
-        text = text.replace(
-            "    parser.add_argument(\n"
-            "        '-g', '--gpu',\n"
-            "        help='CUDA GPU id (-1 for CPU).',\n"
-            "        type=int,\n"
-            "        default=0,\n"
-            "    )",
-            "    parser.add_argument(\n"
-            "        '-g', '--gpu',\n"
-            "        help='CUDA GPU id (-1 for CPU).',\n"
-            "        type=int,\n"
-            "        default=0,\n"
-            "    )\n"
-            "    parser.add_argument('--max-epochs', type=int, default=1000)\n"
-            "    parser.add_argument('--epoch-samples', type=int, default=10000)\n"
-            "    parser.add_argument('--batch-size', type=int, default=32)\n"
-            "    parser.add_argument('--pretrain-batch-size', type=int, default=128)\n"
-            "    parser.add_argument('--valid-batch-size', type=int, default=128)",
-        )
-        text = text.replace(
-            "    max_epochs = 1000\n"
-            "    batch_size = 32\n"
-            "    pretrain_batch_size = 32\n"
-            "    valid_batch_size = 32",
-            "    max_epochs = args.max_epochs\n"
-            "    batch_size = args.batch_size\n"
-            "    pretrain_batch_size = args.pretrain_batch_size\n"
-            "    valid_batch_size = args.valid_batch_size",
-        )
-        text = text.replace(
-            "int(np.floor(10000/batch_size))*batch_size",
-            "int(np.floor(args.epoch_samples/batch_size))*batch_size",
-        )
     train_py.write_text(text)
 
-    text = utilities_py.read_text()
-    old_inc = "    def __inc__(self, key, value, store, *args, **kwargs):"
-    new_inc = "    def __inc__(self, key, value, *args, **kwargs):"
-    if old_inc in text:
-        text = text.replace(old_inc, new_inc)
-    if new_inc not in text:
-        raise RuntimeError("failed to patch utilities.py: __inc__ signature not found")
-    if "candidate_scores[nan_mask] = min_score - 1.0" not in text:
-        old_candidate_scores = "        candidate_scores = torch.FloatTensor([sample_scores[j] for j in candidates])"
-        if old_candidate_scores not in text:
-            raise RuntimeError("failed to patch utilities.py: candidate_scores assignment not found")
-        text = text.replace(
-            old_candidate_scores,
-            "        candidate_scores = torch.FloatTensor([sample_scores[j] for j in candidates])\n"
-            "        nan_mask = torch.isnan(candidate_scores)\n"
-            "        if nan_mask.any():\n"
-            "            finite_scores = candidate_scores[torch.isfinite(candidate_scores)]\n"
-            "            min_score = finite_scores.min().item() if finite_scores.numel() else 0.0\n"
-            "            candidate_scores[nan_mask] = min_score - 1.0",
-        )
-    if "_is_better" not in text[text.find("class Scheduler") :]:
-        text = text.replace(
-            "        if self.is_better(current, self.best):",
-            "        is_better = self.is_better if hasattr(self, 'is_better') else self._is_better\n"
-            "        if is_better(current, self.best):",
-        )
-    utilities_py.write_text(text)
-
-    run(
-        [
-            sys.executable,
-            "-m",
-            "py_compile",
-            str(dataset_py),
-            str(train_py),
-            str(utilities_py),
-        ]
-    )
-    print("patches applied", flush=True)
-
+    run([sys.executable, "-m", "py_compile", str(train_py)])
+    print("fork output path patch applied", flush=True)
 
 def sample_count(split: str = "train") -> int:
     return len(list((SAMPLE_DIR / split).glob("sample_*.pkl")))
@@ -637,16 +480,6 @@ def train_model() -> None:
         str(SEED),
         "-g",
         gpu_id,
-        "--max-epochs",
-        str(MAX_EPOCHS),
-        "--epoch-samples",
-        str(EPOCH_SAMPLES),
-        "--batch-size",
-        str(BATCH_SIZE),
-        "--pretrain-batch-size",
-        str(PRETRAIN_BATCH_SIZE),
-        "--valid-batch-size",
-        str(VALID_BATCH_SIZE),
     ]
     run_in_thread_with_monitor(args, ECOLE_REPO, "training")
     git_commit_push(
