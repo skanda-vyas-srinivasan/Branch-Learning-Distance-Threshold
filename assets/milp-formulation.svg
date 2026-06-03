@@ -2,7 +2,6 @@
   <title id="title">Standard MILP formulation</title>
   <desc id="desc">Minimize c transpose x plus h transpose y subject to A x plus G y less than or equal to b, x integer, y real.</desc>
   <rect x="0" y="0" width="1100" height="360" fill="#ffffff"/>
-  <rect x="38" y="30" width="1024" height="300" rx="0" fill="#ffffff" stroke="#d8d8d8" stroke-width="2"/>
   <g fill="#111111" font-family="Times New Roman, STIX Two Text, Georgia, serif" font-size="48">
     <text x="105" y="105">minimize</text>
     <text x="360" y="105">
