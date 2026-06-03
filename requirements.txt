@@ -1,0 +1,9 @@
+ecole
+pyscipopt
+torch
+torch-geometric
+numpy
+pandas
+scipy
+matplotlib
+lxml

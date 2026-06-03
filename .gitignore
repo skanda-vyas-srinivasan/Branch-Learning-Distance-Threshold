@@ -1,6 +1,22 @@
 __pycache__/
 *.py[cod]
+.DS_Store
+.ipynb_checkpoints/
+
+# External repos and local runtime workspaces.
+external/
+vast_work/
+vast_work_zjz/
+
+# Generated training samples and archives are too large for normal Git.
+sample_*.pkl
+samples_*.tar.gz
+*.tar.gz
+*.zip
+
+# Local scratch datasets/results from earlier probes.
 local_instances/
+setcover_instances/
 local_results/
 generated_instances/
 generated_results/
@@ -12,7 +28,19 @@ ecole_l2b_results/
 ecole_l2b_probe_results/
 ecole_l2b*_results/
 ecole_l2b*/
-results/
-external/
-vast_work/
-vast_work_zjz/
+fizzed/
+
+# Keep the cleaned source surface small; old local probe modules remain ignored.
+milp_distance/*
+!milp_distance/__init__.py
+!milp_distance/common.py
+!milp_distance/distance.py
+scripts/*
+!scripts/__init__.py
+!scripts/generate_extra_instances.py
+!scripts/prepare_experiment_instances.py
+
+# Experiment caches. CSV/PNG results are intentionally trackable.
+results/reference_reps.pkl
+results/.cache/
+results/.matplotlib/
