@@ -1,0 +1,5 @@
+metric,r,p_value
+pearson_distance_degradation,0.40046239354994423,4.785711256077241e-11
+pearson_distance_log10_degradation,0.5419398538896817,1.741788876727062e-20
+spearman_distance_degradation,0.45560232789785626,3.2374923406938955e-14
+auroc_predict_ml_worse,0.7728411938938254,
