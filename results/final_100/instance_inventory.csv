@@ -1,0 +1,7 @@
+role,class,folder,n_instances
+reference,setcover,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/reference_setcover,100
+eval,setcover_valid,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/eval_setcover,100
+eval,cauctions,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/eval_cauctions,100
+eval,facilities,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/eval_facilities,100
+eval,indset,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/eval_indset,100
+eval,mknapsack,/Users/skandavyassrinivasan/Documents/Integral-Optimization-Branch-Learning-Research/data/instances/eval_mknapsack,100
