@@ -1,7 +1,7 @@
 metric,r,p_value
-pearson_distance_degradation,0.37940032321973755,1.4519577419202288e-18
-pearson_distance_log10_degradation,0.5873412906704322,1.0756073799736521e-47
-spearman_distance_degradation,0.5176359433921647,1.281841798676467e-35
-auroc_predict_ml_worse,0.7119716905901117,
+pearson_distance_degradation,0.3223056243297358,4.030206530652208e-11
+pearson_distance_log10_degradation,0.5249957305742685,1.0280723245585675e-29
+spearman_distance_degradation,0.32740598630884976,1.8994139225552067e-11
+auroc_predict_ml_worse,0.7104284784831304,
 pearson_distance_log10_walltime_ratio,,
 spearman_distance_walltime_ratio,,
