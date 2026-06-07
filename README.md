@@ -1,134 +1,67 @@
-# MILP Distance Gating for Learned Branching
+# Branch Learning Distance Threshold
 
-This repository tests whether a Maudet-style MILP instance distance can act as a pre-solve gate for learned branching.
+Code for an exploratory project testing whether Maudet-Danoy MILP instance distance can help explain transfer behavior in learned branching. A Learn2Branch-style policy trained on set-cover instances is evaluated on other MILP families using relative node count as the main transfer metric.
 
-The trained model is a Learn2Branch/Ecole GNN trained on setcover instances. The experiment compares vanilla SCIP against ML branching on MILP instances at different distances from the setcover training distribution.
+Full explanation and discussion are in the accompanying write-up: **An Exploratory Look at Branch Learning Transfer**.
 
-## Repository Layout
+## What To Run
 
-```text
-experiment.ipynb                 Main experiment notebook
-milp_distance/                   Maudet-style distance implementation
-models/baseline_setcover/        Trained setcover GNN weights and log
-models/learn2branch_gnn.py       Vendored Learn2Branch GNN definition
-scripts/generate_extra_instances.py
-scripts/prepare_experiment_instances.py
-runners/vast_runner.py           Optional Vast.ai retraining runner
-data/instances/                  Curated 50-per-class evaluation instances
-results/                         Experiment CSVs and plots after running
-```
-
-The repository intentionally tracks curated MILP instances, model weights, source code, and final CSV/PNG results. It does not track Ecole training samples, tarballs, external cloned repos, or local scratch runs.
-
-## Environment
-
-Use Python 3.11 with Ecole:
+Create the environment:
 
 ```bash
 conda env create -f environment.yml
 conda activate ecole
 ```
 
-If you already have a compatible environment:
+Open the notebook:
 
 ```bash
-python -m pip install -r requirements.txt
+jupyter notebook experiment.ipynb
 ```
 
-Expected core packages:
+Then run the notebook cells in order.
 
-```text
-ecole 0.8.x
-pyscipopt
-torch
-torch-geometric
-numpy / pandas / scipy / matplotlib
-```
-
-## Instances
-
-The experiment uses 50 setcover reference instances and 10 evaluation classes with 50 instances each:
-
-```text
-reference_setcover
-eval_setcover
-eval_cauctions
-eval_facilities
-eval_indset
-eval_mknapsack
-eval_setpacking
-eval_setpartitioning
-eval_vertexcover
-eval_binpacking
-eval_generalized_assignment
-```
-
-If the curated folders need to be rebuilt locally:
-
-```bash
-conda run -n ecole python -m scripts.prepare_experiment_instances --count 50
-```
-
-## Running The Experiment
-
-Open `experiment.ipynb` in the `ecole` kernel and run cells in order.
-
-The expensive cell is Cell 6. It solves each evaluation instance twice:
-
-```text
-vanilla SCIP
-ML branching with the trained GNN
-```
-
-For a quick smoke run, edit Cell 6:
+For a quick smoke run, change the notebook settings to:
 
 ```python
 N_PER_CLASS = 3
 TIME_LIMIT = 10
 ```
 
-For the intended run:
+For the full run used in the write-up:
 
 ```python
-N_PER_CLASS = 50
-TIME_LIMIT = 60
+N_PER_CLASS = 100
+TIME_LIMIT = 300
 ```
 
-## Saved Outputs
+## What Is Already Included
 
-The notebook writes reusable artifacts under `results/`:
+```text
+experiment.ipynb                  Main experiment notebook
+milp_distance/                    Distance and branching evaluation code
+models/baseline_setcover/         Trained set-cover branching model
+data/instances/                   MILP instances used by the notebook
+results/final_100/                Saved outputs from the final run
+```
+
+The baseline model is already included, so retraining is not required to reproduce the notebook experiment.
+
+## Main Outputs
+
+The notebook writes results under:
+
+```text
+results/final_100/
+```
+
+The most important files are:
 
 ```text
 raw_results.csv
-failures.csv
-distance_cache.csv
-instance_inventory.csv
-instance_stats.csv
-dataset_inventory.csv
 summary_by_class.csv
-distance_summary_by_class.csv
-solver_summary_by_class.csv
-threshold_table.csv
-correlation_summary.csv
-leave_one_class_out.csv
-within_class_correlations.csv
-*.png plots
+scatter_distance_rnc_jittered_no_line.png
+box_degradation_by_class.png
 ```
 
-`raw_results.csv` is the important expensive output. If it exists, Cell 6 resumes and skips completed instances.
-
-## Training Artifacts
-
-The baseline trained model is:
-
-```text
-models/baseline_setcover/train_params.pkl
-models/baseline_setcover/train_log.txt
-```
-
-The original 100k/20k Ecole sample archive is not tracked in Git because it is too large. It was stored externally as:
-
-```text
-samples_setcover_500r_1000c_0.05d.tar.gz
-sha256: 8c2511c47282a5f33e14b554b62cdc19924ab5957e6a46c4f4f4b3916afac047
-```
+If `raw_results.csv` already exists, the notebook can reuse completed evaluations instead of starting from scratch.
